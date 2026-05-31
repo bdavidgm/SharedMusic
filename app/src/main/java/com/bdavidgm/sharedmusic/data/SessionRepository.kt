@@ -2,6 +2,10 @@ package com.bdavidgm.sharedmusic.data
 
 import android.content.Context
 import android.media.MediaMetadataRetriever
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.Uri
 import android.provider.OpenableColumns
 import com.bdavidgm.sharedmusic.audio.AudioPlayerController
@@ -18,12 +22,14 @@ import com.bdavidgm.sharedmusic.network.protocol.ControlMessage
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.launch
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -51,6 +57,9 @@ class SessionRepository @Inject constructor(
     private var server: MusicServer? = null
     private var client: MusicClient? = null
 
+    private var localAddressNetworkCallback: ConnectivityManager.NetworkCallback? = null
+    private var localAddressRefreshJob: Job? = null
+
     private var selectedTrackUri: Uri? = null
 
     // region Inicio de sesión por rol
@@ -67,6 +76,7 @@ class SessionRepository @Inject constructor(
             )
         }
         server = MusicServer(port, scope, serverListener).also { it.start() }
+        registerLocalAddressNetworkObserver()
     }
 
     fun startClient(host: String, port: Int) {
@@ -100,6 +110,7 @@ class SessionRepository @Inject constructor(
         client = MusicClient(
             upstreamHost, upstreamPort, nodeId, NodeMode.REPEATER.name, scope, clientListener
         ).also { it.connect() }
+        registerLocalAddressNetworkObserver()
     }
 
     // endregion
@@ -218,12 +229,66 @@ class SessionRepository @Inject constructor(
     }
 
     private fun reset() {
+        unregisterLocalAddressNetworkObserver()
         client?.close()
         server?.stop()
         client = null
         server = null
         audio.stop()
         trackBuffer.reset()
+    }
+
+    /**
+     * Actualiza la IP mostrada cuando cambian las redes (p. ej. al activar el
+     * hotspot). Usa [ConnectivityManager.registerNetworkCallback] en lugar del
+     * broadcast deprecado [ConnectivityManager.CONNECTIVITY_ACTION].
+     */
+    private fun registerLocalAddressNetworkObserver() {
+        unregisterLocalAddressNetworkObserver()
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) = scheduleLocalAddressRefresh()
+
+            override fun onLost(network: Network) = scheduleLocalAddressRefresh()
+
+            override fun onCapabilitiesChanged(
+                network: Network,
+                networkCapabilities: NetworkCapabilities
+            ) = scheduleLocalAddressRefresh()
+
+            override fun onLinkPropertiesChanged(
+                network: Network,
+                linkProperties: android.net.LinkProperties
+            ) = scheduleLocalAddressRefresh()
+        }
+        localAddressNetworkCallback = callback
+        runCatching {
+            cm.registerNetworkCallback(NetworkRequest.Builder().build(), callback)
+        }
+        scheduleLocalAddressRefresh()
+    }
+
+    private fun unregisterLocalAddressNetworkObserver() {
+        localAddressRefreshJob?.cancel()
+        localAddressRefreshJob = null
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        localAddressNetworkCallback?.let {
+            runCatching { cm.unregisterNetworkCallback(it) }
+        }
+        localAddressNetworkCallback = null
+    }
+
+    private fun scheduleLocalAddressRefresh() {
+        val mode = _state.value.mode
+        if (mode != NodeMode.SERVER && mode != NodeMode.REPEATER) return
+        localAddressRefreshJob?.cancel()
+        localAddressRefreshJob = scope.launch {
+            delay(400)
+            val ip = NetworkUtils.bestLocalIpv4ForDisplay() ?: return@launch
+            _state.update { curr ->
+                if (curr.localAddress == ip) curr else curr.copy(localAddress = ip)
+            }
+        }
     }
 
     // region Listeners de red
