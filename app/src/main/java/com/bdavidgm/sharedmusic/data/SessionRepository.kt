@@ -66,6 +66,13 @@ class SessionRepository @Inject constructor(
     private var localAddressRefreshJob: Job? = null
     private var wifiApStateReceiver: BroadcastReceiver? = null
 
+    /**
+     * Foto de las interfaces activas tomada al iniciar el nodo cuando la zona WiFi
+     * NO estaba activa. Si es null, la zona WiFi ya estaba activa al arrancar y se
+     * usa directamente el algoritmo de lista de preferencia.
+     */
+    private var interfaceBaseline: Set<String>? = null
+
     private var selectedTrackUri: Uri? = null
 
     // region Inicio de sesión por rol
@@ -251,6 +258,14 @@ class SessionRepository @Inject constructor(
      */
     private fun registerLocalAddressNetworkObserver() {
         unregisterLocalAddressNetworkObserver()
+        // Si la zona WiFi NO está activa al arrancar, guardamos la foto base de
+        // interfaces para detectar luego cuál aparece al encenderla (diferencial).
+        // Si ya está activa, baseline = null -> se usa la lista de preferencia.
+        interfaceBaseline = if (NetworkUtils.isLikelyHotspotActive()) {
+            null
+        } else {
+            NetworkUtils.activeInterfaceNames()
+        }
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         val callback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) = scheduleLocalAddressRefresh()
@@ -278,6 +293,7 @@ class SessionRepository @Inject constructor(
     private fun unregisterLocalAddressNetworkObserver() {
         localAddressRefreshJob?.cancel()
         localAddressRefreshJob = null
+        interfaceBaseline = null
         unregisterWifiApStateReceiver()
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         localAddressNetworkCallback?.let {
@@ -325,10 +341,27 @@ class SessionRepository @Inject constructor(
         localAddressRefreshJob?.cancel()
         localAddressRefreshJob = scope.launch {
             delay(delayMs)
-            val ip = NetworkUtils.bestLocalIpv4ForDisplay() ?: return@launch
+            val ip = resolveLocalAddress() ?: return@launch
             _state.update { curr ->
                 if (curr.localAddress == ip) curr else curr.copy(localAddress = ip)
             }
+        }
+    }
+
+    /**
+     * Elige la IP a mostrar:
+     * - Si arrancamos sin zona WiFi (hay [interfaceBaseline]): algoritmo diferencial,
+     *   la IP de la interfaz que apareció respecto a la foto base. Si aún no apareció
+     *   ninguna nueva, cae a la lista de preferencia.
+     * - Si arrancamos con la zona WiFi ya activa (baseline null): lista de preferencia.
+     */
+    private fun resolveLocalAddress(): String? {
+        val baseline = interfaceBaseline
+        return if (baseline != null) {
+            NetworkUtils.ipv4OnNewInterfaceVsBaseline(baseline)
+                ?: NetworkUtils.bestLocalIpv4ForDisplay()
+        } else {
+            NetworkUtils.bestLocalIpv4ForDisplay()
         }
     }
 
