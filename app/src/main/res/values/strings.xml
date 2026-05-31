@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">SharedMusic</string>
+    <string name="session_channel_name">Sesión de música</string>
+    <string name="session_notification_title">SharedMusic en ejecución</string>
+</resources>
