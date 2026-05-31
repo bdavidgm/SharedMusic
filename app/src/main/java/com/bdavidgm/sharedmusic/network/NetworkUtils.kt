@@ -10,7 +10,7 @@ object NetworkUtils {
      * Prefiere interfaces típicas de tethering (softap, ap0, swlan…) y la
      * subred clásica 192.168.43.x de Android; evita interfaces de datos móvil.
      */
-    fun bestLocalIpv4ForDisplay(): String? = runCatching {
+    fun bestLocalIpv4ForDisplay(): String? = runCatching<String?> {
         data class Candidate(val iface: String, val host: String)
 
         fun isBlockedInterface(name: String): Boolean {
@@ -59,10 +59,10 @@ object NetworkUtils {
 
         if (candidates.isEmpty()) return@runCatching null
 
-        candidates.firstOrNull { isLikelySoftApInterface(it.iface) && it.host.startsWith("192.168.43.") }
-            ?: candidates.firstOrNull { isLikelySoftApInterface(it.iface) }
-            ?: candidates.firstOrNull { it.host.startsWith("192.168.43.") }
-            ?: candidates.firstOrNull { isPrivateIpv4(it.host) }
+        candidates.firstOrNull { isLikelySoftApInterface(it.iface) && it.host.startsWith("192.168.43.") }?.host
+            ?: candidates.firstOrNull { isLikelySoftApInterface(it.iface) }?.host
+            ?: candidates.firstOrNull { it.host.startsWith("192.168.43.") }?.host
+            ?: candidates.firstOrNull { isPrivateIpv4(it.host) }?.host
             ?: candidates.first().host
     }.getOrNull()
 
