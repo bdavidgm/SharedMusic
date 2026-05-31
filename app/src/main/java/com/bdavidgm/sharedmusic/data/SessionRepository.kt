@@ -1,13 +1,18 @@
 package com.bdavidgm.sharedmusic.data
 
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.media.MediaMetadataRetriever
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.Uri
+import android.os.Build
 import android.provider.OpenableColumns
+import androidx.core.content.ContextCompat
 import com.bdavidgm.sharedmusic.audio.AudioPlayerController
 import com.bdavidgm.sharedmusic.audio.TrackBuffer
 import com.bdavidgm.sharedmusic.domain.model.NodeMode
@@ -59,6 +64,7 @@ class SessionRepository @Inject constructor(
 
     private var localAddressNetworkCallback: ConnectivityManager.NetworkCallback? = null
     private var localAddressRefreshJob: Job? = null
+    private var wifiApStateReceiver: BroadcastReceiver? = null
 
     private var selectedTrackUri: Uri? = null
 
@@ -239,9 +245,9 @@ class SessionRepository @Inject constructor(
     }
 
     /**
-     * Actualiza la IP mostrada cuando cambian las redes (p. ej. al activar el
-     * hotspot). Usa [ConnectivityManager.registerNetworkCallback] en lugar del
-     * broadcast deprecado [ConnectivityManager.CONNECTIVITY_ACTION].
+     * Actualiza la IP mostrada cuando cambian las redes o el hotspot portable:
+     * [ConnectivityManager.registerNetworkCallback] y los broadcasts de estado
+     * del hotspot (`android.net.wifi.WIFI_AP_STATE_CHANGED` y la acción API 33+).
      */
     private fun registerLocalAddressNetworkObserver() {
         unregisterLocalAddressNetworkObserver()
@@ -265,12 +271,14 @@ class SessionRepository @Inject constructor(
         runCatching {
             cm.registerNetworkCallback(NetworkRequest.Builder().build(), callback)
         }
+        registerWifiApStateReceiver()
         scheduleLocalAddressRefresh()
     }
 
     private fun unregisterLocalAddressNetworkObserver() {
         localAddressRefreshJob?.cancel()
         localAddressRefreshJob = null
+        unregisterWifiApStateReceiver()
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         localAddressNetworkCallback?.let {
             runCatching { cm.unregisterNetworkCallback(it) }
@@ -278,12 +286,45 @@ class SessionRepository @Inject constructor(
         localAddressNetworkCallback = null
     }
 
-    private fun scheduleLocalAddressRefresh() {
+    /** Reacciona al hotspot portable del sistema (zona WiFi). */
+    private fun registerWifiApStateReceiver() {
+        unregisterWifiApStateReceiver()
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(appContext: Context?, intent: Intent?) {
+                scheduleLocalAddressRefresh(delayMs = 900L)
+            }
+        }
+        wifiApStateReceiver = receiver
+        val filter = IntentFilter().apply {
+            addAction(ACTION_WIFI_AP_STATE_LEGACY)
+            addAction(ACTION_WIFI_AP_STATE_PLATFORM)
+        }
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                ContextCompat.registerReceiver(
+                    context,
+                    receiver,
+                    filter,
+                    ContextCompat.RECEIVER_NOT_EXPORTED
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                context.registerReceiver(receiver, filter)
+            }
+        }
+    }
+
+    private fun unregisterWifiApStateReceiver() {
+        wifiApStateReceiver?.let { runCatching { context.unregisterReceiver(it) } }
+        wifiApStateReceiver = null
+    }
+
+    private fun scheduleLocalAddressRefresh(delayMs: Long = 450L) {
         val mode = _state.value.mode
         if (mode != NodeMode.SERVER && mode != NodeMode.REPEATER) return
         localAddressRefreshJob?.cancel()
         localAddressRefreshJob = scope.launch {
-            delay(400)
+            delay(delayMs)
             val ip = NetworkUtils.bestLocalIpv4ForDisplay() ?: return@launch
             _state.update { curr ->
                 if (curr.localAddress == ip) curr else curr.copy(localAddress = ip)
@@ -420,5 +461,11 @@ class SessionRepository @Inject constructor(
     companion object {
         private const val START_LEAD_MS = 3000L
         private const val RESUME_LEAD_MS = 800L
+
+        /** Valor de [android.net.wifi.WifiManager.WIFI_AP_STATE_CHANGED_ACTION] (API antigua). */
+        private const val ACTION_WIFI_AP_STATE_LEGACY = "android.net.wifi.WIFI_AP_STATE_CHANGED"
+
+        /** Valor de la acción de hotspot en API 33+ (nombre estable en la plataforma). */
+        private const val ACTION_WIFI_AP_STATE_PLATFORM = "android.net.wifi.action.WIFI_AP_STATE_CHANGED"
     }
 }
