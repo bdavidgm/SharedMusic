@@ -40,6 +40,14 @@ class SessionViewModel @Inject constructor(
 
     fun selectTrack(uri: Uri) = repository.selectTrack(uri)
 
+    fun addPlaylistItems(uris: List<Uri>) = repository.addPlaylistItems(uris)
+
+    fun addPlaylistFromTree(treeUri: Uri) = repository.addPlaylistFromTree(treeUri)
+
+    fun togglePlaylistTransport() = repository.togglePlaylistTransport()
+
+    fun removePlaylistItemAt(index: Int) = repository.removePlaylistItemAt(index)
+
     fun play() = repository.startPlayback()
 
     fun pause() = repository.pause()

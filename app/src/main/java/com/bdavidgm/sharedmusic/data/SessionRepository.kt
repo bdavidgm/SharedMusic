@@ -18,6 +18,7 @@ import com.bdavidgm.sharedmusic.audio.TrackBuffer
 import com.bdavidgm.sharedmusic.domain.model.NodeMode
 import com.bdavidgm.sharedmusic.domain.model.Peer
 import com.bdavidgm.sharedmusic.domain.model.SessionPhase
+import com.bdavidgm.sharedmusic.domain.model.PlaylistItem
 import com.bdavidgm.sharedmusic.domain.model.SessionState
 import com.bdavidgm.sharedmusic.domain.model.TrackInfo
 import com.bdavidgm.sharedmusic.network.MusicClient
@@ -29,13 +30,16 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -75,6 +79,19 @@ class SessionRepository @Inject constructor(
 
     private var selectedTrackUri: Uri? = null
 
+    private var playlistMode: Boolean = false
+    private var playlistIndex: Int = 0
+    private var serverStreamJob: Job? = null
+
+    /** Invalida callbacks de jobs de transferencia cancelados al iniciar otro o detener. */
+    private val serverStreamGeneration = AtomicInteger(0)
+
+    private fun prepareStreamReplacement(): Int {
+        serverStreamJob?.cancel()
+        serverStreamJob = null
+        return serverStreamGeneration.incrementAndGet()
+    }
+
     // region Inicio de sesión por rol
 
     fun startServer(port: Int) {
@@ -85,11 +102,18 @@ class SessionRepository @Inject constructor(
                 phase = SessionPhase.READY,
                 listenPort = port,
                 localAddress = NetworkUtils.localIpv4Address(),
-                message = "Servidor listo. Comparte tu IP y selecciona una canción."
+                playlist = emptyList(),
+                playingFromPlaylist = false,
+                message = "Servidor listo. Usa Conexión para la red y Reproducción para la cola."
             )
         }
         server = MusicServer(port, scope, serverListener).also { it.start() }
         registerLocalAddressNetworkObserver()
+        audio.setOnPlaybackEndedListener {
+            if (_state.value.mode == NodeMode.SERVER && playlistMode) {
+                onPlaylistTrackPlaybackEnded()
+            }
+        }
     }
 
     fun startClient(host: String, port: Int) {
@@ -138,18 +162,177 @@ class SessionRepository @Inject constructor(
         }
     }
 
-    /** Distribuye la pista a todos los clientes y programa el arranque común. */
-    fun startPlayback() {
-        val uri = selectedTrackUri ?: run {
-            _state.update { it.copy(errorMessage = "Selecciona una canción primero.") }
+    fun addPlaylistItems(uris: List<Uri>) {
+        if (_state.value.mode != NodeMode.SERVER) return
+        if (uris.isEmpty()) return
+        val existing = _state.value.playlist.map { it.uriString }.toSet()
+        val newItems = uris
+            .distinctBy { it.toString() }
+            .filter { it.toString() !in existing }
+            .map { uri ->
+                val info = readTrackInfo(uri)
+                PlaylistItem(
+                    uriString = uri.toString(),
+                    name = info.name,
+                    mimeType = info.mimeType,
+                    sizeBytes = info.sizeBytes,
+                    durationMs = info.durationMs
+                )
+            }
+        if (newItems.isEmpty()) return
+        _state.update {
+            it.copy(playlist = it.playlist + newItems, errorMessage = null)
+        }
+    }
+
+    fun addPlaylistFromTree(treeUri: Uri) {
+        if (_state.value.mode != NodeMode.SERVER) return
+        scope.launch {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    treeUri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }
+            val uris = PlaylistAudioScanner.collectAudioUrisFromTree(context, treeUri)
+            if (uris.isEmpty()) {
+                _state.update {
+                    it.copy(message = "No se encontraron archivos de audio en esa carpeta.")
+                }
+                return@launch
+            }
+            addPlaylistItems(uris)
+            _state.update {
+                it.copy(message = "Se agregaron ${uris.size} pista(s) desde la carpeta.")
+            }
+        }
+    }
+
+    fun removePlaylistItemAt(index: Int) {
+        if (_state.value.mode != NodeMode.SERVER) return
+        val list = _state.value.playlist
+        if (index !in list.indices) return
+        val interrupted = playlistMode && index == playlistIndex
+        if (interrupted) {
+            prepareStreamReplacement()
+            audio.stop()
+            server?.broadcastControl(ControlMessage.Stop)
+        }
+        val newList = list.toMutableList().apply { removeAt(index) }
+        if (playlistMode) {
+            when {
+                index < playlistIndex -> playlistIndex--
+                index == playlistIndex && newList.isNotEmpty() && playlistIndex >= newList.size ->
+                    playlistIndex = newList.lastIndex
+            }
+        }
+        val emptyAfter = newList.isEmpty()
+        if (interrupted && emptyAfter) {
+            playlistMode = false
+            playlistIndex = 0
+        }
+        _state.update {
+            it.copy(
+                playlist = newList,
+                playingFromPlaylist = if (interrupted && emptyAfter) false else it.playingFromPlaylist,
+                phase = if (interrupted && emptyAfter) SessionPhase.READY else it.phase,
+                isPlaying = if (interrupted && emptyAfter) false else it.isPlaying,
+                positionMs = if (interrupted && emptyAfter) 0L else it.positionMs,
+                message = if (interrupted && emptyAfter) "Lista actualizada." else it.message
+            )
+        }
+        if (interrupted && !emptyAfter && _state.value.playingFromPlaylist) {
+            playlistMode = true
+            launchServerStreamFromUri(Uri.parse(newList[playlistIndex].uriString))
+        }
+    }
+
+    /**
+     * Inicia o detiene la reproducción desde la cola del servidor.
+     * Al detener cancela la transferencia en curso.
+     */
+    fun togglePlaylistTransport() {
+        if (_state.value.mode != NodeMode.SERVER) return
+        if (_state.value.playingFromPlaylist || playlistMode) {
+            playlistMode = false
+            prepareStreamReplacement()
+            playlistIndex = 0
+            audio.stop()
+            server?.broadcastControl(ControlMessage.Stop)
+            _state.update {
+                it.copy(
+                    isPlaying = false,
+                    phase = SessionPhase.READY,
+                    positionMs = 0L,
+                    playingFromPlaylist = false,
+                    message = "Reproducción detenida."
+                )
+            }
             return
         }
-        val srv = server ?: return
-        val track = _state.value.track ?: readTrackInfo(uri)
+        val list = _state.value.playlist
+        if (list.isEmpty()) {
+            _state.update {
+                it.copy(errorMessage = "Agrega canciones o carpetas a la lista primero.")
+            }
+            return
+        }
+        playlistMode = true
+        playlistIndex = 0
+        _state.update {
+            it.copy(
+                playingFromPlaylist = true,
+                errorMessage = null,
+                phase = SessionPhase.READY,
+                message = "Iniciando cola de reproducción…"
+            )
+        }
+        launchServerStreamFromUri(Uri.parse(list[0].uriString))
+    }
 
+    private fun onPlaylistTrackPlaybackEnded() {
         scope.launch {
+            delay(100)
+            if (!playlistMode) return@launch
+            playlistIndex++
+            val list = _state.value.playlist
+            if (playlistIndex >= list.size) {
+                playlistMode = false
+                playlistIndex = 0
+                audio.stop()
+                server?.broadcastControl(ControlMessage.Stop)
+                _state.update {
+                    it.copy(
+                        isPlaying = false,
+                        phase = SessionPhase.READY,
+                        playingFromPlaylist = false,
+                        message = "Lista de reproducción finalizada."
+                    )
+                }
+                return@launch
+            }
+            server?.broadcastControl(ControlMessage.Stop)
+            delay(200)
+            launchServerStreamFromUri(Uri.parse(list[playlistIndex].uriString))
+        }
+    }
+
+    private fun launchServerStreamFromUri(uri: Uri) {
+        val srv = server ?: return
+        val generation = prepareStreamReplacement()
+        serverStreamJob = scope.launch {
+            val track = readTrackInfo(uri)
+            selectedTrackUri = uri
+            _state.update {
+                it.copy(
+                    track = track,
+                    transferProgress = 0f,
+                    errorMessage = null,
+                    message = if (playlistMode) "Transmitiendo: ${track.name}" else "Pista: ${track.name}"
+                )
+            }
             try {
-                _state.update { it.copy(phase = SessionPhase.TRANSFERRING, transferProgress = 0f) }
+                _state.update { it.copy(phase = SessionPhase.TRANSFERRING) }
                 val extension = TrackBuffer.extensionForMime(track.mimeType)
                 val localFile = trackBuffer.begin(extension)
 
@@ -166,6 +349,7 @@ class SessionRepository @Inject constructor(
                     val buffer = ByteArray(32 * 1024)
                     var sent = 0L
                     while (true) {
+                        ensureActive()
                         val read = input.read(buffer)
                         if (read <= 0) break
                         srv.broadcastChunk(buffer, read)
@@ -192,12 +376,44 @@ class SessionRepository @Inject constructor(
                         message = "Reproduciendo en sincronía."
                     )
                 }
+            } catch (e: CancellationException) {
+                trackBuffer.reset()
+                audio.stop()
+                if (generation == serverStreamGeneration.get()) {
+                    _state.update {
+                        it.copy(
+                            phase = SessionPhase.READY,
+                            transferProgress = 0f,
+                            isPlaying = false,
+                            message = "Transferencia cancelada."
+                        )
+                    }
+                }
+                throw e
             } catch (t: Throwable) {
+                trackBuffer.reset()
+                playlistMode = false
                 _state.update {
-                    it.copy(phase = SessionPhase.ERROR, errorMessage = t.message ?: "Error al transferir")
+                    it.copy(
+                        phase = SessionPhase.ERROR,
+                        errorMessage = t.message ?: "Error al transferir",
+                        playingFromPlaylist = false
+                    )
                 }
             }
         }
+    }
+
+    /** Compatibilidad: reproduce la pista seleccionada con [selectTrack] (sin cola). */
+    fun startPlayback() {
+        val uri = selectedTrackUri ?: run {
+            _state.update { it.copy(errorMessage = "Selecciona una canción primero.") }
+            return
+        }
+        if (server == null) return
+        playlistMode = false
+        _state.update { it.copy(playingFromPlaylist = false) }
+        launchServerStreamFromUri(uri)
     }
 
     // endregion
@@ -227,10 +443,17 @@ class SessionRepository @Inject constructor(
     }
 
     fun stopPlayback() {
+        prepareStreamReplacement()
+        playlistMode = false
         audio.stop()
         server?.broadcastControl(ControlMessage.Stop)
         _state.update {
-            it.copy(isPlaying = false, phase = SessionPhase.READY, positionMs = 0L)
+            it.copy(
+                isPlaying = false,
+                phase = SessionPhase.READY,
+                positionMs = 0L,
+                playingFromPlaylist = false
+            )
         }
     }
 
@@ -243,6 +466,10 @@ class SessionRepository @Inject constructor(
 
     private fun reset() {
         unregisterLocalAddressNetworkObserver()
+        prepareStreamReplacement()
+        playlistMode = false
+        playlistIndex = 0
+        audio.setOnPlaybackEndedListener(null)
         client?.close()
         server?.stop()
         client = null

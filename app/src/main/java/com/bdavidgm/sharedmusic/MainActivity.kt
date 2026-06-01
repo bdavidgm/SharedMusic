@@ -8,8 +8,6 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
@@ -36,9 +34,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             SharedMusicTheme {
-                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    AppNavigation(modifier = Modifier.padding(innerPadding))
-                }
+                AppNavigation(modifier = Modifier.fillMaxSize())
             }
         }
     }
@@ -82,15 +78,14 @@ private fun AppNavigation(modifier: Modifier = Modifier) {
         composable(Routes.SESSION) {
             SessionScreen(
                 state = state,
-                onSelectTrack = viewModel::selectTrack,
-                onPlay = viewModel::play,
-                onPause = viewModel::pause,
-                onResume = viewModel::resume,
-                onStopPlayback = viewModel::stopPlayback,
                 onStopSession = {
                     viewModel.stopSession()
                     navController.popBackStack(Routes.SETUP, inclusive = false)
-                }
+                },
+                onAddPlaylistItem = { uri -> viewModel.addPlaylistItems(listOf(uri)) },
+                onAddPlaylistFolder = viewModel::addPlaylistFromTree,
+                onTogglePlaylistTransport = viewModel::togglePlaylistTransport,
+                onRemovePlaylistItem = viewModel::removePlaylistItemAt
             )
         }
     }

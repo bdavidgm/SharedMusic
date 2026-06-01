@@ -20,6 +20,18 @@ data class TrackInfo(
     val durationMs: Long = 0L
 )
 
+/** Entrada en la cola de reproducción del servidor (URI como string para el estado). */
+data class PlaylistItem(
+    val uriString: String,
+    val name: String,
+    val mimeType: String,
+    val sizeBytes: Long,
+    val durationMs: Long = 0L
+) {
+    fun toTrackInfo(): TrackInfo =
+        TrackInfo(name = name, mimeType = mimeType, sizeBytes = sizeBytes, durationMs = durationMs)
+}
+
 /** Representa un dispositivo conectado aguas abajo (un cliente directo). */
 data class Peer(
     val id: String,
@@ -40,7 +52,11 @@ data class SessionState(
     val positionMs: Long = 0L,
     val clockOffsetMs: Long = 0L,
     val message: String? = null,
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    /** Cola de reproducción (solo servidor); orden = orden de reproducción. */
+    val playlist: List<PlaylistItem> = emptyList(),
+    /** True mientras la sesión reproduce desde la cola (lista o transferencia). */
+    val playingFromPlaylist: Boolean = false
 ) {
     companion object {
         const val DEFAULT_PORT = 8765

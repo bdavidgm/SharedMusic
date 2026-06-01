@@ -5,6 +5,7 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import java.io.File
 
@@ -21,6 +22,15 @@ class AudioPlayerController(private val context: Context) {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var player: ExoPlayer? = null
     private var pendingStart: Runnable? = null
+    private var onPlaybackEnded: (() -> Unit)? = null
+
+    private val playbackEndedListener = object : Player.Listener {
+        override fun onPlaybackStateChanged(playbackState: Int) {
+            if (playbackState == Player.STATE_ENDED) {
+                onPlaybackEnded?.invoke()
+            }
+        }
+    }
 
     @Volatile
     var isPlaying: Boolean = false
@@ -40,9 +50,17 @@ class AudioPlayerController(private val context: Context) {
         }
     }
 
+    /** Notificación en el hilo donde se invoque el callback (típicamente main desde ExoPlayer). */
+    fun setOnPlaybackEndedListener(listener: (() -> Unit)?) {
+        onPlaybackEnded = listener
+    }
+
     fun prepare(file: File, onError: (Throwable) -> Unit = {}) = onMain {
         runCatching {
-            val exo = player ?: ExoPlayer.Builder(context).build().also { player = it }
+            val exo = player ?: ExoPlayer.Builder(context).build().also { newPlayer ->
+                player = newPlayer
+                newPlayer.addListener(playbackEndedListener)
+            }
             exo.setMediaItem(MediaItem.fromUri(Uri.fromFile(file)))
             exo.playWhenReady = false
             exo.prepare()
