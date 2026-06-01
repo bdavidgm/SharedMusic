@@ -124,13 +124,13 @@ fun SetupScreen(
 
                 NodeMode.CLIENT -> {
                     HostField(host) { host = it }
-                    PortField("Puerto del upstream", upstreamPort) { upstreamPort = it }
+                    PortField("Puerto del Servidor", upstreamPort) { upstreamPort = it }
                 }
 
                 NodeMode.REPEATER -> {
                     HostField(host) { host = it }
-                    PortField("Puerto del upstream", upstreamPort) { upstreamPort = it }
-                    PortField("Puerto de escucha (clientes)", listenPort) { listenPort = it }
+                    PortField("Puerto del Servidor", upstreamPort) { upstreamPort = it }
+                    PortField("Puerto de escucha", listenPort) { listenPort = it }
                 }
             }
 
@@ -228,7 +228,7 @@ private fun HostField(value: String, onValueChange: (String) -> Unit) {
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
-        label = { Text("IP del upstream", color = scheme.secondary) },
+        label = { Text("IP del Servidor", color = scheme.secondary) },
         singleLine = true,
         modifier = Modifier.fillMaxWidth(),
         colors = OutlinedTextFieldDefaults.colors(

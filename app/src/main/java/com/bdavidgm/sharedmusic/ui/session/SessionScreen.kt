@@ -4,6 +4,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -35,6 +36,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
@@ -48,9 +50,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.bdavidgm.sharedmusic.domain.model.NodeMode
 import com.bdavidgm.sharedmusic.domain.model.SessionPhase
 import com.bdavidgm.sharedmusic.domain.model.SessionState
@@ -462,12 +466,57 @@ private fun NetworkCard(state: SessionState) {
                 style = MaterialTheme.typography.labelMedium,
                 color = scheme.onPrimaryContainer.copy(alpha = 0.85f)
             )
-            Text(
-                text = "${state.localAddress ?: "IP desconocida"}:${state.listenPort}",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = scheme.primary
+            val labelMuted = scheme.onPrimaryContainer.copy(alpha = 0.52f)
+            val labelStyle = MaterialTheme.typography.labelLarge.copy(
+                fontWeight = FontWeight.SemiBold,
+                letterSpacing = 0.3.sp
             )
+            val valueStyle = MaterialTheme.typography.titleMedium.copy(
+                fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text("IP", style = labelStyle, color = labelMuted)
+                    Text(":", style = labelStyle, color = labelMuted.copy(alpha = 0.4f))
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = scheme.surface.copy(alpha = 0.7f),
+                        border = BorderStroke(1.dp, scheme.outline.copy(alpha = 0.2f))
+                    ) {
+                        Text(
+                            text = state.localAddress ?: "IP desconocida",
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            style = valueStyle,
+                            color = scheme.primary
+                        )
+                    }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text("Puerto", style = labelStyle, color = labelMuted)
+                    Text(":", style = labelStyle, color = labelMuted.copy(alpha = 0.4f))
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = scheme.surface.copy(alpha = 0.7f),
+                        border = BorderStroke(1.dp, scheme.outline.copy(alpha = 0.2f))
+                    ) {
+                        Text(
+                            text = state.listenPort.toString(),
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            style = valueStyle,
+                            color = scheme.primary
+                        )
+                    }
+                }
+            }
             Divider(
                 color = scheme.outline.copy(alpha = 0.35f),
                 modifier = Modifier.padding(vertical = 4.dp)
