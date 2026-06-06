@@ -213,10 +213,9 @@ class SessionRepository @Inject constructor(
         val list = _state.value.playlist
         if (index !in list.indices) return
         val interrupted = playlistMode && index == playlistIndex
+        val streamJob = if (interrupted) serverStreamJob else null
         if (interrupted) {
             prepareStreamReplacement()
-            audio.stop()
-            server?.broadcastControl(ControlMessage.Stop)
         }
         val newList = list.toMutableList().apply { removeAt(index) }
         if (playlistMode) {
@@ -241,9 +240,19 @@ class SessionRepository @Inject constructor(
                 message = if (interrupted && emptyAfter) "Lista actualizada." else it.message
             )
         }
-        if (interrupted && !emptyAfter && _state.value.playingFromPlaylist) {
-            playlistMode = true
-            launchServerStreamFromUri(Uri.parse(newList[playlistIndex].uriString))
+        val resumeNext = interrupted && !emptyAfter && _state.value.playingFromPlaylist
+        val nextUri = if (resumeNext) Uri.parse(newList[playlistIndex].uriString) else null
+        if (interrupted) {
+            scope.launch {
+                streamJob?.join()
+                audio.stop()
+                server?.broadcastControl(ControlMessage.Stop)
+                if (nextUri != null) {
+                    playlistMode = true
+                    delay(200)
+                    launchServerStreamFromUri(nextUri)
+                }
+            }
         }
     }
 
@@ -255,18 +264,22 @@ class SessionRepository @Inject constructor(
         if (_state.value.mode != NodeMode.SERVER) return
         if (_state.value.playingFromPlaylist || playlistMode) {
             playlistMode = false
+            val streamJob = serverStreamJob
             prepareStreamReplacement()
             playlistIndex = 0
-            audio.stop()
-            server?.broadcastControl(ControlMessage.Stop)
-            _state.update {
-                it.copy(
-                    isPlaying = false,
-                    phase = SessionPhase.READY,
-                    positionMs = 0L,
-                    playingFromPlaylist = false,
-                    message = "Reproducción detenida."
-                )
+            scope.launch {
+                streamJob?.join()
+                audio.stop()
+                server?.broadcastControl(ControlMessage.Stop)
+                _state.update {
+                    it.copy(
+                        isPlaying = false,
+                        phase = SessionPhase.READY,
+                        positionMs = 0L,
+                        playingFromPlaylist = false,
+                        message = "Reproducción detenida."
+                    )
+                }
             }
             return
         }
@@ -443,17 +456,21 @@ class SessionRepository @Inject constructor(
     }
 
     fun stopPlayback() {
+        val streamJob = serverStreamJob
         prepareStreamReplacement()
         playlistMode = false
-        audio.stop()
-        server?.broadcastControl(ControlMessage.Stop)
-        _state.update {
-            it.copy(
-                isPlaying = false,
-                phase = SessionPhase.READY,
-                positionMs = 0L,
-                playingFromPlaylist = false
-            )
+        scope.launch {
+            streamJob?.join()
+            audio.stop()
+            server?.broadcastControl(ControlMessage.Stop)
+            _state.update {
+                it.copy(
+                    isPlaying = false,
+                    phase = SessionPhase.READY,
+                    positionMs = 0L,
+                    playingFromPlaylist = false
+                )
+            }
         }
     }
 
@@ -662,6 +679,7 @@ class SessionRepository @Inject constructor(
         }
 
         override fun onStop() {
+            trackBuffer.reset()
             audio.stop()
             server?.broadcastControl(ControlMessage.Stop)
             _state.update { it.copy(isPlaying = false, phase = SessionPhase.READY, positionMs = 0L) }
