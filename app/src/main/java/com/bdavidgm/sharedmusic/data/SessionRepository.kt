@@ -96,18 +96,33 @@ class SessionRepository @Inject constructor(
 
     fun startServer(port: Int) {
         reset()
+        val requested = port.coerceIn(1, 65535)
+        val chosen = NetworkUtils.findAvailableListenPort(requested) ?: run {
+            _state.update {
+                it.copy(
+                    mode = NodeMode.SERVER,
+                    phase = SessionPhase.ERROR,
+                    listenPort = requested,
+                    errorMessage = "No hay ningún puerto TCP libre (1-65535)."
+                )
+            }
+            return
+        }
+        val portNote =
+            if (chosen != requested) " (el $requested estaba ocupado; usando $chosen)"
+            else ""
         _state.update {
             it.copy(
                 mode = NodeMode.SERVER,
                 phase = SessionPhase.READY,
-                listenPort = port,
+                listenPort = chosen,
                 localAddress = NetworkUtils.localIpv4Address(),
                 playlist = emptyList(),
                 playingFromPlaylist = false,
-                message = "Servidor listo. Usa Conexión para la red y Reproducción para la cola."
+                message = "Servidor listo en puerto $chosen$portNote. Usa Conexión para la red y Reproducción para la cola."
             )
         }
-        server = MusicServer(port, scope, serverListener).also { it.start() }
+        server = MusicServer(chosen, scope, serverListener).also { it.start() }
         registerLocalAddressNetworkObserver()
         audio.setOnPlaybackEndedListener {
             if (_state.value.mode == NodeMode.SERVER && playlistMode) {
@@ -133,17 +148,33 @@ class SessionRepository @Inject constructor(
 
     fun startRepeater(upstreamHost: String, upstreamPort: Int, listenPort: Int) {
         reset()
+        val requested = listenPort.coerceIn(1, 65535)
+        val chosen = NetworkUtils.findAvailableListenPort(requested) ?: run {
+            _state.update {
+                it.copy(
+                    mode = NodeMode.REPEATER,
+                    phase = SessionPhase.ERROR,
+                    listenPort = requested,
+                    upstreamHost = upstreamHost,
+                    errorMessage = "No hay ningún puerto TCP libre (1-65535) para escuchar."
+                )
+            }
+            return
+        }
+        val portNote =
+            if (chosen != requested) " Puerto de escucha: $chosen (el $requested estaba ocupado)."
+            else " Puerto de escucha: $chosen."
         _state.update {
             it.copy(
                 mode = NodeMode.REPEATER,
                 phase = SessionPhase.CONNECTING,
                 upstreamHost = upstreamHost,
-                listenPort = listenPort,
+                listenPort = chosen,
                 localAddress = NetworkUtils.localIpv4Address(),
-                message = "Repetidor: conectando a $upstreamHost:$upstreamPort…"
+                message = "Repetidor: conectando a $upstreamHost:$upstreamPort…$portNote"
             )
         }
-        server = MusicServer(listenPort, scope, serverListener).also { it.start() }
+        server = MusicServer(chosen, scope, serverListener).also { it.start() }
         client = MusicClient(
             upstreamHost, upstreamPort, nodeId, NodeMode.REPEATER.name, scope, clientListener
         ).also { it.connect() }

@@ -2,8 +2,11 @@ package com.bdavidgm.sharedmusic.network
 
 import java.net.Inet4Address
 import java.net.NetworkInterface
+import java.net.ServerSocket
 
 object NetworkUtils {
+
+    private const val MAX_TCP_PORT = 65535
 
     /**
      * Nombres exactos de interfaz frecuentes para hotspot / tether (orden de prioridad).
@@ -174,4 +177,34 @@ object NetworkUtils {
      * @see bestLocalIpv4ForDisplay
      */
     fun localIpv4Address(): String? = bestLocalIpv4ForDisplay()
+
+    /**
+     * Prueba si otro proceso puede enlazar ya TCP en [port] (1..65535).
+     * Abre y cierra un [ServerSocket] de prueba; no garantiza ausencia de carrera
+     * milisegundos después, pero evita el caso habitual de puerto ocupado.
+     */
+    fun isTcpListenPortAvailable(port: Int): Boolean {
+        val p = port.coerceIn(1, MAX_TCP_PORT)
+        return runCatching {
+            ServerSocket(p).use { }
+            true
+        }.getOrDefault(false)
+    }
+
+    /**
+     * Busca un puerto TCP libre para escuchar: recorre [preferred]..65535 y, si
+     * todos están ocupados, 1..[preferred]-1.
+     *
+     * @return el primer puerto libre, o null si no hay ninguno (1..65535).
+     */
+    fun findAvailableListenPort(preferred: Int): Int? {
+        val p0 = preferred.coerceIn(1, MAX_TCP_PORT)
+        for (p in p0..MAX_TCP_PORT) {
+            if (isTcpListenPortAvailable(p)) return p
+        }
+        for (p in 1 until p0) {
+            if (isTcpListenPortAvailable(p)) return p
+        }
+        return null
+    }
 }
