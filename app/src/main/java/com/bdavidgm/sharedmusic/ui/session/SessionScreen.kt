@@ -528,7 +528,7 @@ private fun NetworkCard(state: SessionState) {
             )
             state.downstreamPeers.forEach { peer ->
                 Text(
-                    "• ${peer.address}",
+                    "• ${peer.displayLabel()}",
                     style = MaterialTheme.typography.bodySmall,
                     color = scheme.onPrimaryContainer.copy(alpha = 0.9f)
                 )

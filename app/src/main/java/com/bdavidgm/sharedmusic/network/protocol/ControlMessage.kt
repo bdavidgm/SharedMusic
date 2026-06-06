@@ -15,10 +15,15 @@ import kotlinx.serialization.Serializable
 @Serializable
 sealed interface ControlMessage {
 
-    /** Saludo inicial que envía quien se conecta. */
+    /** Saludo inicial que envía quien se conecta (incluye datos del dispositivo para el servidor). */
     @Serializable
     @SerialName("hello")
-    data class Hello(val role: String, val nodeId: String) : ControlMessage
+    data class Hello(
+        val role: String,
+        val nodeId: String,
+        val deviceManufacturer: String = "",
+        val deviceModel: String = ""
+    ) : ControlMessage
 
     /** Petición de sincronización de reloj. [t0] es el reloj local del que pregunta. */
     @Serializable

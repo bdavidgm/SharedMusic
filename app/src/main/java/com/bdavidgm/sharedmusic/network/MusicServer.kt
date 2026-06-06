@@ -57,7 +57,13 @@ class MusicServer(
 
     private fun handleNewConnection(connection: FrameConnection) {
         val id = connection.remoteAddress
-        val peer = Peer(id = id, address = id)
+        val hello = readInitialHello(connection)
+        val peer = Peer(
+            id = id,
+            address = id,
+            deviceManufacturer = hello?.deviceManufacturer?.trim().orEmpty(),
+            deviceModel = hello?.deviceModel?.trim().orEmpty()
+        )
         val job = scope.launch(Dispatchers.IO) {
             try {
                 while (isActive) {
@@ -82,6 +88,15 @@ class MusicServer(
         clients[id] = Client(peer, connection, job)
         listener.onPeerConnected(peer)
     }
+
+    /** El cliente envía [ControlMessage.Hello] como primera trama; se consume aquí para no duplicar lectura en el bucle. */
+    private fun readInitialHello(connection: FrameConnection): ControlMessage.Hello? =
+        runCatching {
+            when (val frame = connection.readFrame()) {
+                is Frame.Control -> frame.message as? ControlMessage.Hello
+                else -> null
+            }
+        }.getOrNull()
 
     fun broadcastControl(message: ControlMessage) = forEachClient { it.writeControl(message) }
 

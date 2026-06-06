@@ -35,8 +35,24 @@ data class PlaylistItem(
 /** Representa un dispositivo conectado aguas abajo (un cliente directo). */
 data class Peer(
     val id: String,
-    val address: String
-)
+    val address: String,
+    /** Marca del terminal (p. ej. fabricante Android). */
+    val deviceManufacturer: String = "",
+    /** Modelo del terminal. */
+    val deviceModel: String = ""
+) {
+    /** Texto para listas: marca y modelo si existen, si no solo la dirección. */
+    fun displayLabel(): String {
+        val brand = deviceManufacturer.trim()
+        val model = deviceModel.trim()
+        return when {
+            brand.isNotEmpty() && model.isNotEmpty() -> "$brand $model · $address"
+            brand.isNotEmpty() -> "$brand · $address"
+            model.isNotEmpty() -> "$model · $address"
+            else -> address
+        }
+    }
+}
 
 /** Estado observable completo de la sesión, expuesto por el repositorio. */
 data class SessionState(

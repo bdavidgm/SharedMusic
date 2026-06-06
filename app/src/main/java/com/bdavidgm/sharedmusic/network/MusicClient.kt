@@ -23,6 +23,8 @@ class MusicClient(
     private val port: Int,
     private val nodeId: String,
     private val role: String,
+    private val deviceManufacturer: String,
+    private val deviceModel: String,
     private val scope: CoroutineScope,
     private val listener: Listener
 ) {
@@ -53,7 +55,14 @@ class MusicClient(
                 val conn = FrameConnection(socket)
                 connection = conn
 
-                conn.writeControl(ControlMessage.Hello(role = role, nodeId = nodeId))
+                conn.writeControl(
+                    ControlMessage.Hello(
+                        role = role,
+                        nodeId = nodeId,
+                        deviceManufacturer = deviceManufacturer,
+                        deviceModel = deviceModel
+                    )
+                )
                 offsetMs = TimeSynchronizer.measureOffset(conn)
                 listener.onConnected(offsetMs)
 

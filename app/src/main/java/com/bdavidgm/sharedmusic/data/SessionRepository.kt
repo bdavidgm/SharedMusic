@@ -142,8 +142,16 @@ class SessionRepository @Inject constructor(
                 message = "Conectando a $host:$port…"
             )
         }
-        client = MusicClient(host, port, nodeId, NodeMode.CLIENT.name, scope, clientListener)
-            .also { it.connect() }
+        client = MusicClient(
+            host = host,
+            port = port,
+            nodeId = nodeId,
+            role = NodeMode.CLIENT.name,
+            deviceManufacturer = clientDeviceManufacturer(),
+            deviceModel = clientDeviceModel(),
+            scope = scope,
+            listener = clientListener
+        ).also { it.connect() }
     }
 
     fun startRepeater(upstreamHost: String, upstreamPort: Int, listenPort: Int) {
@@ -176,7 +184,14 @@ class SessionRepository @Inject constructor(
         }
         server = MusicServer(chosen, scope, serverListener).also { it.start() }
         client = MusicClient(
-            upstreamHost, upstreamPort, nodeId, NodeMode.REPEATER.name, scope, clientListener
+            host = upstreamHost,
+            port = upstreamPort,
+            nodeId = nodeId,
+            role = NodeMode.REPEATER.name,
+            deviceManufacturer = clientDeviceManufacturer(),
+            deviceModel = clientDeviceModel(),
+            scope = scope,
+            listener = clientListener
         ).also { it.connect() }
         registerLocalAddressNetworkObserver()
     }
@@ -739,6 +754,12 @@ class SessionRepository @Inject constructor(
     }
 
     // endregion
+
+    private fun clientDeviceManufacturer(): String =
+        Build.MANUFACTURER.orEmpty().trim().take(96)
+
+    private fun clientDeviceModel(): String =
+        Build.MODEL.orEmpty().trim().take(96)
 
     private fun readTrackInfo(uri: Uri): TrackInfo {
         var name = "audio"
