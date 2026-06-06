@@ -1,5 +1,9 @@
 package com.bdavidgm.sharedmusic.ui.setup
 
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -12,6 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -19,6 +24,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.RadioButton
@@ -32,14 +38,18 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import com.bdavidgm.sharedmusic.domain.model.NodeMode
 import com.bdavidgm.sharedmusic.domain.model.SessionState
+import com.google.zxing.BarcodeFormat
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -54,6 +64,61 @@ fun SetupScreen(
     var host by remember { mutableStateOf("192.168.43.1") }
     var upstreamPort by remember { mutableStateOf(SessionState.DEFAULT_PORT.toString()) }
     var listenPort by remember { mutableStateOf(SessionState.DEFAULT_PORT.toString()) }
+    var scanParseError by remember { mutableStateOf<String?>(null) }
+    var pendingQrAfterCamera by remember { mutableStateOf(false) }
+
+    val context = LocalContext.current
+    val scanContract = remember { ScanContract() }
+    val scanOptions = remember {
+        ScanOptions().apply {
+            setDesiredBarcodeFormats(listOf(BarcodeFormat.QR_CODE.name))
+            setPrompt("Apunta al código QR del servidor")
+            setBeepEnabled(false)
+            // Por defecto ZXing fija orientación horizontal; false = seguir la del dispositivo.
+            setOrientationLocked(false)
+        }
+    }
+
+    val scanLauncher = rememberLauncherForActivityResult(scanContract) { result ->
+        scanParseError = null
+        val contents = result.contents
+        if (contents.isNullOrBlank()) return@rememberLauncherForActivityResult
+        val parsed = parseConnectionQrPayload(contents)
+        if (parsed == null) {
+            scanParseError = "El código no es una dirección ip:puerto válida."
+        } else {
+            host = parsed.first
+            upstreamPort = parsed.second.toString()
+        }
+    }
+
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted && pendingQrAfterCamera) {
+            pendingQrAfterCamera = false
+            scanLauncher.launch(scanOptions)
+        } else {
+            pendingQrAfterCamera = false
+            if (!granted) {
+                scanParseError = "Se necesita permiso de cámara para leer el QR."
+            }
+        }
+    }
+
+    val openQrScanner: () -> Unit = {
+        scanParseError = null
+        val hasCamera = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.CAMERA
+        ) == PackageManager.PERMISSION_GRANTED
+        if (hasCamera) {
+            scanLauncher.launch(scanOptions)
+        } else {
+            pendingQrAfterCamera = true
+            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+        }
+    }
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -131,6 +196,22 @@ fun SetupScreen(
                     HostField(host) { host = it }
                     PortField("Puerto del Servidor", upstreamPort) { upstreamPort = it }
                     PortField("Puerto de escucha", listenPort) { listenPort = it }
+                }
+            }
+
+            if (selectedMode == NodeMode.CLIENT || selectedMode == NodeMode.REPEATER) {
+                OutlinedButton(
+                    onClick = openQrScanner,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Leer código QR", fontWeight = FontWeight.Medium)
+                }
+                scanParseError?.let { err ->
+                    Text(
+                        text = err,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
                 }
             }
 
